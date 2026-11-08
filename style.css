@@ -44,3 +44,20 @@ select{appearance:none;-webkit-appearance:none;border:0;outline:0;background:tra
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.55}}
 @media(min-width:650px){.page{padding-top:42px}.counter-card{padding:32px 36px}.intro{font-size:18px}}
 @media(max-width:380px){.page{padding-inline:12px}.counter-card{padding:20px 16px;border-radius:27px}.count{font-size:96px}.listen-btn{font-size:17px}.reset-btn{padding-inline:13px}}
+.brand-mark {
+  width: 90px;
+  height: 90px;
+  margin: 0 auto 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: transparent;
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
