@@ -1,3 +1,4 @@
+
 (() => {
   "use strict";
 
@@ -17,12 +18,12 @@
 
   const STORE_KEY = "misbah_voice_counts_v1";
   const counts = JSON.parse(localStorage.getItem(STORE_KEY) || "{}");
+
   let recognition = null;
   let listening = false;
   let manuallyStopped = true;
   let restartTimer = null;
-  let lastAcceptedText = "";
-  let lastAcceptedAt = 0;
+  let processedResults = new Set();
   let toastTimer = null;
 
   const aliases = {
@@ -43,12 +44,20 @@
       .trim();
   }
 
-  function currentDhikr() { return select.value; }
-  function currentCount() { return Number(counts[currentDhikr()] || 0); }
+  function currentDhikr() {
+    return select.value;
+  }
+
+  function currentCount() {
+    return Number(counts[currentDhikr()] || 0);
+  }
 
   function save() {
-    try { localStorage.setItem(STORE_KEY, JSON.stringify(counts)); }
-    catch (_) { showToast("تعذر حفظ العدد على هذا الجهاز."); }
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify(counts));
+    } catch (_) {
+      showToast("تعذر حفظ العدد على هذا الجهاز.");
+    }
   }
 
   function renderCount() {
@@ -70,43 +79,50 @@
     toastTimer = setTimeout(() => toast.classList.remove("show"), 3300);
   }
 
-  function matchesSelected(transcript) {
+  // حساب عدد مرات تكرار الذكر داخل النص المتعرف عليه
+  function countMatches(transcript) {
     const heard = normalize(transcript);
     const variants = aliases[currentDhikr()] || [currentDhikr()];
-    return variants.some(phrase => {
+    let maximum = 0;
+
+    variants.forEach(phrase => {
       const target = normalize(phrase);
-      return heard === target || (` ${heard} `).includes(` ${target} `);
+      if (!target) return;
+
+      const occurrences = heard.split(target).length - 1;
+      maximum = Math.max(maximum, occurrences);
     });
+
+    return maximum;
   }
 
   function acceptTranscript(transcript) {
     const cleaned = String(transcript || "").trim();
     if (!cleaned) return;
+
     lastHeard.textContent = cleaned;
 
-    if (!matchesSelected(cleaned)) {
+    const amount = countMatches(cleaned);
+
+    if (amount === 0) {
       recognitionTitle.textContent = "لم يتم احتساب هذا الصوت";
       recognitionDetail.textContent = "قل الذكر المحدد: " + currentDhikr();
       return;
     }
 
-    const normalized = normalize(cleaned);
-    const now = Date.now();
-    // Prevent the same final result from being counted twice by browser event retries.
-    if (normalized === lastAcceptedText && now - lastAcceptedAt < 1100) return;
-    lastAcceptedText = normalized;
-    lastAcceptedAt = now;
-
-    counts[currentDhikr()] = currentCount() + 1;
+    counts[currentDhikr()] = currentCount() + amount;
     save();
     renderCount();
-    recognitionTitle.textContent = "تم احتساب الذكر ✓";
-    recognitionDetail.textContent = "أحسنت، واصل على مهل";
+
+    recognitionTitle.textContent = "تم احتساب " + amount + " من الأذكار ✓";
+    recognitionDetail.textContent = "أحسنت، واصل";
+
     if (navigator.vibrate) navigator.vibrate(35);
   }
 
   function createRecognition() {
     if (!SpeechRecognition) return null;
+
     const engine = new SpeechRecognition();
     engine.lang = "ar-JO";
     engine.continuous = true;
@@ -115,6 +131,9 @@
 
     engine.onstart = () => {
       if (!listening) return;
+
+      processedResults.clear();
+
       setStatus("يستمع إليك الآن", true);
       recognitionTitle.textContent = "أنا أستمع إليك";
       recognitionDetail.textContent = "قل: " + currentDhikr();
@@ -123,18 +142,31 @@
     engine.onresult = event => {
       for (let i = event.resultIndex; i < event.results.length; i++) {
         const result = event.results[i];
+
         if (!result.isFinal) continue;
-        // Count only one matching alternative for each final recognition result.
-        let found = false;
+
+        // منع معالجة نتيجة التعرف نفسها مرتين
+        if (processedResults.has(i)) continue;
+        processedResults.add(i);
+
+        let bestTranscript = "";
+        let bestCount = 0;
+
         for (let j = 0; j < result.length; j++) {
           const phrase = result[j].transcript;
-          if (matchesSelected(phrase)) {
-            acceptTranscript(phrase);
-            found = true;
-            break;
+          const amount = countMatches(phrase);
+
+          if (amount > bestCount) {
+            bestCount = amount;
+            bestTranscript = phrase;
           }
         }
-        if (!found && result.length) acceptTranscript(result[0].transcript);
+
+        if (bestTranscript) {
+          acceptTranscript(bestTranscript);
+        } else if (result.length) {
+          acceptTranscript(result[0].transcript);
+        }
       }
     };
 
@@ -152,20 +184,24 @@
       } else if (event.error === "network") {
         recognitionDetail.textContent = "تعذر الاتصال بخدمة التعرف الصوتي. تحقق من الإنترنت.";
       }
-      // no-speech is normal during pauses; onend handles a controlled restart.
     };
 
     engine.onend = () => {
       if (!listening || manuallyStopped) return;
+
       clearTimeout(restartTimer);
+
       restartTimer = setTimeout(() => {
         if (!listening || manuallyStopped) return;
-        try { engine.start(); }
-        catch (_) {
-          // A start already in progress is harmless; wait for the next end event.
+
+        try {
+          engine.start();
+        } catch (_) {
+          // تجاهل محاولة التشغيل إذا كان المحرك يعمل بالفعل
         }
-      }, 650);
+      }, 150);
     };
+
     return engine;
   }
 
@@ -176,14 +212,19 @@
       recognitionDetail.textContent = "هذه الميزة تعتمد على دعم المتصفح لخدمة تحويل الكلام إلى نص.";
       return;
     }
+
     if (listening) return;
+
     if (!recognition) recognition = createRecognition();
+
     listening = true;
     manuallyStopped = false;
-    lastAcceptedText = "";
+    processedResults.clear();
+
     setStatus("جارٍ تشغيل الميكروفون", true);
     recognitionTitle.textContent = "جارٍ الاتصال";
     recognitionDetail.textContent = "قد تظهر رسالة إذن الميكروفون عند أول استخدام فقط.";
+
     try {
       recognition.start();
     } catch (error) {
@@ -198,9 +239,13 @@
     listening = false;
     manuallyStopped = true;
     clearTimeout(restartTimer);
+
     if (recognition) {
-      try { recognition.stop(); } catch (_) {}
+      try {
+        recognition.stop();
+      } catch (_) {}
     }
+
     setStatus("تم إيقاف الاستماع", false);
     recognitionTitle.textContent = "توقف الاستماع";
     recognitionDetail.textContent = "يمكنك العودة وبدء الاستماع متى شئت.";
@@ -215,11 +260,14 @@
     renderCount();
     lastHeard.textContent = "—";
     recognitionTitle.textContent = "الذكر المحدد: " + currentDhikr();
-    recognitionDetail.textContent = listening ? "قل الذكر الجديد بوضوح." : "ابدأ الاستماع عندما تكون مستعداً.";
+    recognitionDetail.textContent = listening
+      ? "قل الذكر الجديد بوضوح."
+      : "ابدأ الاستماع عندما تكون مستعداً.";
   });
 
   resetBtn.addEventListener("click", () => {
     if (!confirm("هل تريد تصفير عدّاد «" + currentDhikr() + "»؟")) return;
+
     counts[currentDhikr()] = 0;
     save();
     renderCount();
@@ -230,8 +278,11 @@
     listening = false;
     manuallyStopped = true;
     clearTimeout(restartTimer);
+
     if (recognition) {
-      try { recognition.abort(); } catch (_) {}
+      try {
+        recognition.abort();
+      } catch (_) {}
     }
   });
 
